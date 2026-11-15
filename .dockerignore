@@ -1,0 +1,8 @@
+.venv
+.runtime
+.env
+var
+omr-check-answer-sheet-images
+omr-exam-paper-example
+__pycache__
+dist

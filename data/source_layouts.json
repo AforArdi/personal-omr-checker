@@ -1,0 +1,294 @@
+{
+  "1": [
+    [
+      0,
+      0.168,
+      "Paper Final-01 Biology 1st Paper"
+    ],
+    [
+      0.168,
+      0.334,
+      "Paper Final-02 Biology 1st Paper"
+    ],
+    [
+      0.334,
+      0.5,
+      "Paper Final-01 Biology 2nd Paper"
+    ],
+    [
+      0.5,
+      0.666,
+      "Paper Final-02 Biology 2nd Paper"
+    ],
+    [
+      0.666,
+      0.833,
+      "Paper Final-01 Chemistry 1st Paper"
+    ],
+    [
+      0.833,
+      1,
+      "Paper Final-02 Chemistry 1st Paper"
+    ]
+  ],
+  "2": [
+    [
+      0.023,
+      0.155,
+      "Paper Final-01 Chemistry 2nd Paper"
+    ],
+    [
+      0.157,
+      0.298,
+      "Paper Final-02 Chemistry 2nd Paper"
+    ],
+    [
+      0.3,
+      0.44,
+      "Paper Final-01 Physics 1st Paper"
+    ],
+    [
+      0.442,
+      0.583,
+      "Paper Final-02 Physics 1st Paper"
+    ],
+    [
+      0.585,
+      0.726,
+      "Paper Final-01 Physics 2nd Paper"
+    ],
+    [
+      0.728,
+      0.873,
+      "Paper Final-02 Physics 2nd Paper"
+    ]
+  ],
+  "3": [
+    [
+      0.08,
+      0.215,
+      "Paper Final-01 Physics 2nd Paper"
+    ],
+    [
+      0.22,
+      0.36,
+      "Paper Final-02 Physics 2nd Paper"
+    ],
+    [
+      0.365,
+      0.505,
+      "Paper Final English"
+    ],
+    [
+      0.51,
+      0.65,
+      "Paper Final GK"
+    ]
+  ],
+  "4": [
+    [
+      0.033,
+      0.197,
+      "Subject Final Biology"
+    ],
+    [
+      0.205,
+      0.365,
+      "Subject Final Chemistry"
+    ],
+    [
+      0.38,
+      0.54,
+      "Subject Final Physics"
+    ],
+    [
+      0.55,
+      0.716,
+      "Subject Final GK"
+    ],
+    [
+      0.724,
+      0.884,
+      "Subject Final English"
+    ]
+  ],
+  "5": [
+    [
+      0,
+      0.16666666666666666,
+      "Model Test-01"
+    ],
+    [
+      0.16666666666666666,
+      0.3333333333333333,
+      "Model Test-02"
+    ],
+    [
+      0.3333333333333333,
+      0.5,
+      "Model Test-03"
+    ],
+    [
+      0.5,
+      0.6666666666666666,
+      "Model Test-04"
+    ],
+    [
+      0.6666666666666666,
+      0.8333333333333334,
+      "Model Test-05"
+    ],
+    [
+      0.8333333333333334,
+      1,
+      "Model Test-06"
+    ]
+  ],
+  "6": [
+    [
+      0.063,
+      0.225,
+      "Model Test-06"
+    ],
+    [
+      0.233,
+      0.397,
+      "Model Test-07"
+    ],
+    [
+      0.43,
+      0.589,
+      "Model Test-08"
+    ],
+    [
+      0.596,
+      0.76,
+      "Model Test-09"
+    ],
+    [
+      0.768,
+      0.93,
+      "Model Test-10"
+    ]
+  ],
+  "7": [
+    [
+      0.02,
+      0.18,
+      "Model Test-11"
+    ],
+    [
+      0.19299999999999998,
+      0.353,
+      "Model Test-12"
+    ],
+    [
+      0.366,
+      0.526,
+      "Model Test-13"
+    ],
+    [
+      0.5389999999999999,
+      0.6989999999999998,
+      "Model Test-14"
+    ],
+    [
+      0.712,
+      0.8719999999999999,
+      "Model Test-15"
+    ]
+  ],
+  "8": [
+    [
+      0.02,
+      0.185,
+      "Model Test-16"
+    ],
+    [
+      0.19399999999999998,
+      0.359,
+      "Model Test-17"
+    ],
+    [
+      0.368,
+      0.5329999999999999,
+      "Model Test-18"
+    ],
+    [
+      0.542,
+      0.7070000000000001,
+      "Model Test-19"
+    ]
+  ],
+  "9": [
+    [
+      0.024,
+      0.183,
+      "Model Test-20"
+    ],
+    [
+      0.193,
+      0.353,
+      "Model Test-21"
+    ],
+    [
+      0.36200000000000004,
+      0.523,
+      "Model Test-22"
+    ],
+    [
+      0.531,
+      0.6930000000000001,
+      "Model Test-23"
+    ],
+    [
+      0.7000000000000001,
+      0.863,
+      "Model Test-24"
+    ]
+  ],
+  "10": [
+    [
+      0.024,
+      0.18,
+      "Model Test-25"
+    ],
+    [
+      0.193,
+      0.351,
+      "Model Test-26"
+    ],
+    [
+      0.36200000000000004,
+      0.522,
+      "Model Test-27"
+    ],
+    [
+      0.531,
+      0.6930000000000001,
+      "Model Test-28"
+    ],
+    [
+      0.7000000000000001,
+      0.8640000000000001,
+      "Model Test-29"
+    ]
+  ],
+  "11": [
+    [
+      0.022,
+      0.185,
+      "Model Test-29"
+    ],
+    [
+      0.195,
+      0.357,
+      "Model Test-30"
+    ],
+    [
+      0.365,
+      0.535,
+      "Model Test-31"
+    ]
+  ]
+}

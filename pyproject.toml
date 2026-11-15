@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omr-check"
+version = "0.1.0"
+description = "Reviewable OMR recognition and deterministic exam grading"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=2.2,<3", "opencv-python-headless>=4.11,<5", "Pillow>=11.2,<13",
+  "python-telegram-bot>=22.5,<23", "python-dotenv>=1.1,<2",
+]
+
+[project.optional-dependencies]
+tools = ["pytesseract>=0.3.13,<0.4", "pytest>=8.3,<9"]
+
+[project.scripts]
+omr-check = "omr_check.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["omr_check*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

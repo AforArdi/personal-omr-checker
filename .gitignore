@@ -1,0 +1,14 @@
+.venv/
+.runtime/
+.env
+.env.*
+*.env
+!.env.example
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+var/
+dist/
+omr-check-answer-sheet-images/
+omr-exam-paper-example/
