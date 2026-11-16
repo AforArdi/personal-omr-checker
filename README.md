@@ -4,7 +4,7 @@ A Python Telegram bot with two independently detected OMR layouts, source-linked
 
 ## Current delivery status
 
-All **67 exam keys (6,700 questions total)** are 100% source-verified from high-resolution printed source photos. The full test suite (33 tests) passes cleanly, including end-to-end Telegram bot flow verification (`upload -> preview -> correction -> confirmation -> result`). See `VALIDATION.md` for detailed test metrics, sample recognition outcomes, and remaining limitations. A bot token is not supplied or embedded in this project.
+All **67 exam keys (6,700 questions total)** are 100% source-verified from high-resolution printed source photos. The full test suite (45 tests) passes cleanly, including end-to-end Telegram bot flow verification (`upload -> preview -> correction -> confirmation -> result`), paginated exam search, deterministic inline callback selection, and verified recognition across both layouts (`practice-book` and `retina`) and the new Canva solid-fill fixture (30 marked single fills, 70 blanks, 0 uncertain). See `VALIDATION.md` for detailed test metrics, sample recognition outcomes, and remaining limitations. A bot token is not supplied or embedded in this project.
 
 ## Run on this Windows laptop
 
@@ -50,13 +50,34 @@ The original folders `omr-check-answer-sheet-images` and `omr-exam-paper-example
 - If a key accepts B or C, either individual bubble is correct. Filling both remains wrong.
 - Uncertain recognition is a separate state and blocks grading until resolved. A bad photo is not automatically counted as wrong.
 
-Results list wrong question numbers, unanswered questions, multiple/invalid marks, and selected versus accepted answers.
+Results use explicit labels with separated question lists and answer comparisons:
+```
+Score: 28.75 / 100
+Correct: 29
+Wrong answers: 1
+Unanswered: 70
+Multiple-marked: 0
+Invalid-marked: 0
 
-## Exam names and keys
+Wrong question numbers: Q2
+Unanswered question numbers: Q31, Q32, ...
+Multiple-marked question numbers: none
+Invalid-marked question numbers: none
+
+Your answer → accepted answer:
+Q2: A → B
+```
+
+## Exam search and selection
 
 `data/answer_keys.json` has a schema version, scoring metadata, and 67 exam records: 50 practice-book exams and 17 Retina exams. Every initial record reserves question numbers 1–100. An unresolved answer is `null`, never a guessed letter. Accepted answers are arrays, for example `"74": ["B", "C"]`.
 
-The two collections contain some identical exam names, including Model Test-01 and Subject Final Biology. The bot offers the distinct collection IDs when a name is ambiguous; it never silently chooses. IDs also work as image captions. Filenames such as `model-ans-pic-5.jpg` are source pages containing several exams, not exam names.
+- `/exams [words]` performs keyword search across exam IDs, displayed names, collections, and aliases (e.g. `/exams english practice`). Results are paginated with inline `[Select: ...]` buttons and page navigation.
+- `/exam` without arguments shows concise usage help.
+- `/exam NAME` accepts exact displayed labels (e.g. `Paper Final English [Practice book]`), exact IDs, names, or aliases.
+- When an exam name exists across multiple collections, the bot prompts with collection-specific inline buttons; it never silently guesses.
+- Image captions and `/exam` use the exact same resolver. An invalid or ambiguous caption never silently falls back to a previously selected exam.
+- Selecting a new exam updates the default for subsequent uploads without mutating the `exam_id` of an active in-review reading. All callback payloads are strictly bounded under Telegram's 64-byte limit.
 
 ## Architecture
 

@@ -223,15 +223,28 @@ class Recognizer:
     @staticmethod
     def annotate(template: Template, aligned: np.ndarray, marks: list[Mark], centers=None) -> np.ndarray:
         output = aligned.copy()
-        colors = {MarkState.SINGLE:(30,150,30), MarkState.BLANK:(180,110,0), MarkState.MULTIPLE:(0,0,220), MarkState.INVALID:(0,0,220), MarkState.UNCERTAIN:(0,150,240)}
+        colors = {
+            MarkState.SINGLE: (30, 150, 30),
+            MarkState.BLANK: (180, 110, 0),
+            MarkState.MULTIPLE: (0, 0, 220),
+            MarkState.INVALID: (0, 0, 220),
+            MarkState.UNCERTAIN: (0, 150, 240),
+        }
+        sampling_r = template.radius * (0.78 if template.id == "practice-book" else 0.60)
         for mark, row in zip(marks, template.centers if centers is None else centers):
             color = colors[mark.state]
-            for choice, (x,y) in zip("ABCD", row):
-                if choice in mark.choices:
-                    cv2.circle(output, (round(float(x)),round(float(y))), round(template.radius+2), color, 2)
-            x,y = row[0]
-            cv2.putText(output, str(mark.number), (int(x)-30,int(y)+3), cv2.FONT_HERSHEY_SIMPLEX, .25, color, 1, cv2.LINE_AA)
-            if mark.state in (MarkState.UNCERTAIN, MarkState.BLANK, MarkState.INVALID):
-                cv2.rectangle(output,(int(row[0][0]-10),int(y-10)),(int(row[-1][0]+10),int(row[-1][1]+10)),color,1)
-        x0,y0,x1,y1 = template.roi
-        return output[max(0,y0-20):min(output.shape[0],y1+20),max(0,x0-20):min(output.shape[1],x1+20)]
+            if mark.state == MarkState.UNCERTAIN:
+                strengths = mark.strengths if mark.strengths else [0.0] * 4
+                for choice, (x, y), s in zip("ABCD", row, strengths):
+                    if choice in mark.choices or s > 0.18:
+                        cv2.circle(output, (round(float(x)), round(float(y))), round(sampling_r), color, 2)
+            else:
+                for choice, (x, y) in zip("ABCD", row):
+                    if choice in mark.choices:
+                        cv2.circle(output, (round(float(x)), round(float(y))), round(sampling_r), color, 2)
+            x, y = row[0]
+            cv2.putText(output, str(mark.number), (int(x) - 30, int(y) + 3), cv2.FONT_HERSHEY_SIMPLEX, 0.25, color, 1, cv2.LINE_AA)
+            if mark.state in (MarkState.UNCERTAIN, MarkState.BLANK, MarkState.INVALID, MarkState.MULTIPLE):
+                cv2.rectangle(output, (int(row[0][0] - 10), int(y - 10)), (int(row[-1][0] + 10), int(row[-1][1] + 10)), color, 1)
+        x0, y0, x1, y1 = template.roi
+        return output[max(0, y0 - 20):min(output.shape[0], y1 + 20), max(0, x0 - 20):min(output.shape[1], x1 + 20)]

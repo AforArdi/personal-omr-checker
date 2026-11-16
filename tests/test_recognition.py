@@ -94,3 +94,39 @@ def test_full_sample_never_confidently_misreads_a_question(recognizer):
                 continue
             actual=mark.choices[0] if mark.state==MarkState.SINGLE else '-' if mark.state==MarkState.BLANK else mark.state.value
             assert actual==expected,(name,mark.number,actual,expected)
+
+
+def test_canva_30marked_regression(recognizer):
+    file = ROOT / "tests/fixtures/canva_30marked.png"
+    assert file.exists(), "Canva regression fixture must be tracked under tests/fixtures/canva_30marked.png"
+    result = recognizer.read(file)
+    assert result.template_id == "practice-book"
+    assert result.alignment.get("method") == "column_frames"
+    assert result.alignment.get("circle_coverage", 0) >= 0.90
+    assert result.alignment.get("validated_rows_per_column") == [25, 25, 25, 25]
+
+    expected_marks = {
+        1: "A", 2: "A", 3: "C", 4: "D", 5: "A",
+        6: "B", 7: "B", 8: "D", 9: "A", 10: "A",
+        11: "B", 12: "A", 13: "D", 14: "D", 15: "C",
+        16: "D", 17: "C", 18: "C", 19: "A", 20: "A",
+        21: "B", 22: "D", 23: "B", 24: "C", 25: "A",
+        26: "C", 27: "B", 28: "C", 29: "B", 30: "A",
+    }
+
+    # Verify every single question from 1 to 100
+    for mark in result.marks:
+        # Crucial requirement: ZERO uncertain rows
+        assert mark.state != MarkState.UNCERTAIN, f"Q{mark.number} should not be uncertain, strengths={mark.strengths}"
+        if mark.number in expected_marks:
+            assert mark.state == MarkState.SINGLE, f"Q{mark.number} expected single fill, got {mark.state}"
+            assert mark.choices == (expected_marks[mark.number],), f"Q{mark.number} expected {expected_marks[mark.number]}, got {mark.choices}"
+        else:
+            assert mark.state == MarkState.BLANK, f"Q{mark.number} expected blank, got {mark.state} with choices {mark.choices}"
+
+    # Specifically verify the 4 previously uncertain rows: Q12, Q13, Q14, Q19
+    for q_num, exp_choice in [(12, "A"), (13, "D"), (14, "D"), (19, "A")]:
+        m = result.marks[q_num - 1]
+        assert m.state == MarkState.SINGLE
+        assert m.choices == (exp_choice,)
+

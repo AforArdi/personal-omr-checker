@@ -46,7 +46,23 @@ class Catalog:
             if exam.id in self.exams:
                 raise ValueError("Duplicate exam ID")
             self.exams[exam.id] = exam
-            for name in (exam.id, exam.name, *exam.aliases):
+            index_names = [
+                exam.id,
+                exam.name,
+                f"{exam.name} [{exam.collection}]",
+                f"{exam.name} {exam.collection}",
+                f"{exam.collection} {exam.name}",
+                f"{exam.id}: {exam.name} [{exam.collection}]",
+                f"{exam.id} {exam.name}",
+            ]
+            for alias in exam.aliases:
+                index_names.extend([
+                    alias,
+                    f"{alias} [{exam.collection}]",
+                    f"{alias} {exam.collection}",
+                    f"{exam.collection} {alias}",
+                ])
+            for name in index_names:
                 self.index.setdefault(normalize_name(name), set()).add(exam.id)
 
     def match(self, query: str) -> list[Exam]:
@@ -55,4 +71,11 @@ class Catalog:
 
     def search(self, query: str) -> list[Exam]:
         tokens = set(normalize_name(query).split())
-        return sorted((e for e in self.exams.values() if tokens and tokens <= set(normalize_name(e.name + " " + e.collection).split())), key=lambda e: (e.collection, e.name))
+        if not tokens:
+            return []
+        matches = []
+        for e in self.exams.values():
+            searchable = f"{e.id} {e.name} {e.collection} {' '.join(e.aliases)}"
+            if tokens <= set(normalize_name(searchable).split()):
+                matches.append(e)
+        return sorted(matches, key=lambda e: (e.collection, e.name))

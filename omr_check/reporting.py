@@ -7,15 +7,35 @@ def reading_text(marks: list[Mark]) -> str:
 
 
 def format_grade(result: Grade) -> str:
-    def numbers(kind):
-        return ", ".join(map(str, result.numbers(kind))) or "none"
-    lines = [result.exam_name, f"Score: {result.score:.2f} / 100", f"Correct: {len(result.numbers('correct'))}",
-             f"Wrong: {len(result.numbers('wrong'))}", f"Unanswered: {len(result.numbers('blank'))}",
-             f"Multiple: {len(result.numbers('multiple'))} | Invalid: {len(result.numbers('invalid'))}", "",
-             f"Wrong questions: {numbers('wrong')}", f"Unanswered: {numbers('blank')}",
-             f"Multiple-marked: {numbers('multiple')}", f"Invalid-marked: {numbers('invalid')}"]
-    details = [f"Q{q.number}: {'+'.join(q.selected) or q.outcome} → {' or '.join(q.accepted)}"
-               for q in result.questions if q.outcome in {"wrong", "multiple", "invalid"}]
+    def q_list(kind: str) -> str:
+        nums = result.numbers(kind)
+        return ", ".join(f"Q{n}" for n in nums) if nums else "none"
+
+    correct = result.numbers("correct")
+    wrong = result.numbers("wrong")
+    blank = result.numbers("blank")
+    multiple = result.numbers("multiple")
+    invalid = result.numbers("invalid")
+
+    lines = [
+        result.exam_name,
+        f"Score: {result.score:.2f} / 100",
+        f"Correct: {len(correct)}",
+        f"Wrong answers: {len(wrong)}",
+        f"Unanswered: {len(blank)}",
+        f"Multiple-marked: {len(multiple)}",
+        f"Invalid-marked: {len(invalid)}",
+        "",
+        f"Wrong question numbers: {q_list('wrong')}",
+        f"Unanswered question numbers: {q_list('blank')}",
+        f"Multiple-marked question numbers: {q_list('multiple')}",
+        f"Invalid-marked question numbers: {q_list('invalid')}",
+    ]
+    details = [
+        f"Q{q.number}: {'+'.join(q.selected) or q.outcome} → {' or '.join(q.accepted)}"
+        for q in result.questions
+        if q.outcome in {"wrong", "multiple", "invalid"}
+    ]
     if details:
-        lines += ["", "Your answer → accepted answer", *details]
+        lines += ["", "Your answer → accepted answer:", *details]
     return "\n".join(lines)

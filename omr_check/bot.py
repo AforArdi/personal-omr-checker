@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import shutil
 from dataclasses import replace
@@ -11,11 +12,16 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from .catalog import Catalog
-from .domain import MarkState, grade
+from .domain import Exam, MarkState, grade
 from .recognition import RecognitionError, Recognizer
 from .reporting import format_grade, reading_text
 from .sessions import SessionStore, parse_corrections
 from .settings import ROOT, Settings
+
+
+def make_exam_token(exam_id: str) -> str:
+    """Stable token derived strictly from the immutable exam ID."""
+    return hashlib.sha256(exam_id.encode("utf-8")).hexdigest()[:12]
 
 
 class Bot:
@@ -25,6 +31,62 @@ class Bot:
         self.recognizer = Recognizer(ROOT / "assets")
         self.sessions = SessionStore(settings.data_dir, settings.ttl_minutes)
         self.selected: dict[int, str] = {}
+        self.exam_id_to_token: dict[str, str] = {}
+        self.token_to_exam_id: dict[str, str] = {}
+        for exam_id in self.catalog.exams:
+            token = make_exam_token(exam_id)
+            if token in self.token_to_exam_id and self.token_to_exam_id[token] != exam_id:
+                raise ValueError(f"Exam token collision detected: {exam_id} and {self.token_to_exam_id[token]} produce token {token}")
+            self.exam_id_to_token[exam_id] = token
+            self.token_to_exam_id[token] = exam_id
+        self.query_cache: dict[str, str] = {}
+
+    def exam_token(self, exam_id: str) -> str:
+        return self.exam_id_to_token.get(exam_id) or make_exam_token(exam_id)
+
+    def exam_by_token(self, token: str) -> Exam | None:
+        exam_id = self.token_to_exam_id.get(token)
+        if exam_id and exam_id in self.catalog.exams:
+            return self.catalog.exams[exam_id]
+        return None
+
+    def _render_exams_page(self, query: str, page: int = 1, page_size: int = 5) -> tuple[str, InlineKeyboardMarkup | None]:
+        clean_query = query.strip()
+        exams = self.catalog.search(clean_query) if clean_query else sorted(self.catalog.exams.values(), key=lambda e: (e.collection, e.name))
+        total = len(exams)
+        if not exams:
+            return "No matching exams. Try /exams biology or /exams model", None
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * page_size
+        page_exams = exams[start:start + page_size]
+
+        header = f"Available exams{' for ' + repr(clean_query) if clean_query else ''} (Page {page}/{total_pages}, total {total}):"
+        lines = [header]
+        for e in page_exams:
+            status = "" if e.verified else " — key awaiting verification"
+            lines.append(f"• {e.name} [{e.collection}] (ID: {e.id}){status}")
+
+        buttons = []
+        for e in page_exams:
+            label = f"Select: {e.name[:25]} [{e.collection[:10]}]"
+            buttons.append([InlineKeyboardButton(label, callback_data=f"sel:{self.exam_token(e.id)}")])
+
+        nav = []
+        q_token = "all"
+        if clean_query:
+            q_token = hashlib.sha256(clean_query.encode()).hexdigest()[:8]
+            self.query_cache[q_token] = clean_query
+
+        if page > 1:
+            nav.append(InlineKeyboardButton("« Prev", callback_data=f"page:{page-1}:{q_token}"))
+        nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
+        if page < total_pages:
+            nav.append(InlineKeyboardButton("Next »", callback_data=f"page:{page+1}:{q_token}"))
+
+        if nav:
+            buttons.append(nav)
+        return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
     def owner(self, update: Update) -> int | None:
         user = update.effective_user
@@ -58,31 +120,45 @@ class Bot:
         if self.owner(update) is None:
             return
         query = " ".join(context.args)
-        exams = self.catalog.search(query) if query else sorted(self.catalog.exams.values(), key=lambda e:(e.collection,e.name))
-        lines = ["Available exams (names ignore capitalization):"]
-        lines += [f"{e.name} [{e.collection}]" + (" — key awaiting verification" if not e.verified else "") for e in exams]
-        await self.send(update, "\n".join(lines) if exams else "No matching exams. Try /exams biology or /exams model")
+        text, markup = self._render_exams_page(query, page=1)
+        if markup:
+            await update.effective_message.reply_text(text, reply_markup=markup)
+        else:
+            await self.send(update, text)
 
     async def choose(self, update, query: str):
-        matches = self.catalog.match(query)
+        clean = query.strip()
+        if not clean:
+            return None
+        matches = self.catalog.match(clean)
         if len(matches) == 1:
             return matches[0]
         if matches:
-            await self.send(update, "This name exists in more than one collection. Use one of these exact IDs:\n"+"\n".join(f"{e.id}: {e.name} [{e.collection}]" for e in matches))
+            text = "This name exists in more than one collection. Use one of these exact IDs:\n" + "\n".join(f"{e.id}: {e.name} [{e.collection}]" for e in matches)
+            buttons = [[InlineKeyboardButton(f"Select: {e.name[:25]} [{e.collection[:10]}]", callback_data=f"sel:{self.exam_token(e.id)}")] for e in matches]
+            await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
         else:
-            suggestions = self.catalog.search(query)
-            await self.send(update, "Exam not found. Use /exams to see the names." + ("\nPossible matches:\n"+"\n".join(f"{e.name} [{e.collection}]" for e in suggestions[:8]) if suggestions else ""))
+            suggestions = self.catalog.search(clean)
+            if suggestions:
+                text = "Exam not found. Use /exams to see the names.\nPossible matches:\n" + "\n".join(f"{e.name} [{e.collection}]" for e in suggestions[:8])
+                buttons = [[InlineKeyboardButton(f"Select: {e.name[:25]} [{e.collection[:10]}]", callback_data=f"sel:{self.exam_token(e.id)}")] for e in suggestions[:5]]
+                await update.effective_message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+            else:
+                await self.send(update, "Exam not found. Use /exams to see the names.")
         return None
 
     async def exam(self, update, context):
         owner = self.owner(update)
         if owner is None:
             return
-        selected = await self.choose(update, " ".join(context.args))
+        query = " ".join(context.args).strip()
+        if not query:
+            await self.send(update, "Usage: /exam NAME\nSelect an exam before uploading your OMR sheet.\n\nExamples:\n/exam Paper Final English [Practice book]\n/exam retina-model-test-01\n\nUse /exams to search or browse available exams.")
+            return
+        selected = await self.choose(update, query)
         if selected:
             self.selected[owner] = selected.id
-            self.sessions.discard(owner)
-            await self.send(update, f"Selected: {selected.name} [{selected.collection}]\nNow send your OMR image as a file. A new caption can select another exam.")
+            await self.send(update, f"Selected: {selected.name} [{selected.collection}] (ID: {selected.id})\nNow send your OMR image as a file. A new caption can select another exam.")
 
     async def media(self, update, context):
         owner = self.owner(update)
@@ -90,13 +166,17 @@ class Bot:
             return
         self.sessions.cleanup()
         message = update.effective_message
-        name = (message.caption or "").strip() or self.selected.get(owner, "")
-        if not name:
-            await self.send(update, "Add the exam name as the image caption, or choose it with /exam NAME first")
-            return
-        exam = await self.choose(update, name)
-        if not exam:
-            return
+        caption = (message.caption or "").strip()
+        if caption:
+            exam = await self.choose(update, caption)
+            if not exam:
+                return
+        else:
+            selected_id = self.selected.get(owner)
+            if not selected_id or selected_id not in self.catalog.exams:
+                await self.send(update, "Add the exam name as the image caption, or choose it with /exam NAME first")
+                return
+            exam = self.catalog.exams[selected_id]
         media = message.document or (message.photo[-1] if message.photo else None)
         if media is None:
             return
@@ -185,20 +265,60 @@ class Bot:
             self.sessions.discard(owner)
             await self.send(update,"Reading deleted. Send another image with its exam name whenever you are ready")
 
-    async def callback(self, update, context):
-        await update.callback_query.answer()
-        if self.owner(update) is None:
+    async def callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        owner = self.owner(update)
+        if owner is None:
             return
-        if update.callback_query.data.startswith("confirm:"):
-            await self.confirm(update,context)
-        else:
+        data = query.data or ""
+        if data == "noop":
+            return
+        if data.startswith("sel:"):
+            token = data.split(":", 1)[1]
+            exam = self.exam_by_token(token)
+            if exam:
+                self.selected[owner] = exam.id
+                await self.send(update, f"Selected: {exam.name} [{exam.collection}] (ID: {exam.id})\nNow send your OMR image as a file. A new caption can select another exam.")
+            else:
+                await self.send(update, "This exam is no longer available. Use /exams to browse available exams.")
+        elif data.startswith("page:"):
+            parts = data.split(":", 2)
+            if len(parts) == 3:
+                try:
+                    page = int(parts[1])
+                except ValueError:
+                    return
+                q_token = parts[2]
+                if q_token != "all" and q_token not in self.query_cache:
+                    msg = "This search has expired. Please run /exams [words] again to search."
+                    try:
+                        await query.edit_message_text(msg)
+                    except Exception:
+                        if query.message:
+                            await query.message.reply_text(msg)
+                        else:
+                            await self.send(update, msg)
+                    return
+                search_query = "" if q_token == "all" else self.query_cache[q_token]
+                text, markup = self._render_exams_page(search_query, page=page)
+                try:
+                    await query.edit_message_text(text, reply_markup=markup)
+                except Exception:
+                    if query.message:
+                        await query.message.reply_text(text, reply_markup=markup)
+                    else:
+                        await self.send(update, text)
+        elif data.startswith("confirm:"):
+            await self.confirm(update, context)
+        elif data.startswith("cancel:"):
             try:
-                session=self.sessions.get(self.owner(update))
-                if update.callback_query.data.split(":")[1] != session.id:
+                session = self.sessions.get(owner)
+                if data.split(":")[1] != session.id:
                     raise ValueError("This preview was replaced")
-                await self.cancel(update,context)
+                await self.cancel(update, context)
             except ValueError as exc:
-                await self.send(update,str(exc))
+                await self.send(update, str(exc))
 
 
 def run():
@@ -206,10 +326,10 @@ def run():
     bot = Bot(settings)
     # Sequential processing keeps each user's upload/review/confirm lifecycle ordered.
     app = Application.builder().token(settings.token).concurrent_updates(False).build()
-    for command in ("start","exams","exam","fix","confirm","cancel","whoami"):
-        app.add_handler(CommandHandler(command,getattr(bot,command)))
-    app.add_handler(CallbackQueryHandler(bot.callback,pattern=r"^(confirm|cancel):[a-f0-9]{12}:\d+$"))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE,bot.media))
+    for command in ("start", "exams", "exam", "fix", "confirm", "cancel", "whoami"):
+        app.add_handler(CommandHandler(command, getattr(bot, command)))
+    app.add_handler(CallbackQueryHandler(bot.callback))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, bot.media))
 
     async def on_error(update,context):
         # Never log request URLs or exception strings: Telegram URLs contain the token.

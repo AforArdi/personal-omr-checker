@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from omr_check.domain import Exam, Mark, MarkState, grade
+from omr_check.reporting import format_grade
 from omr_check.sessions import parse_corrections
 
 
@@ -65,3 +66,59 @@ def test_corrections_preserve_multiple_and_invalid_states():
 @pytest.mark.parametrize("value",["0=A","101=B","1=X","1=A+A","1=A 1=B","1=", "1=AB"])
 def test_reject_invalid_corrections(value):
     with pytest.raises(ValueError): parse_corrections(value)
+
+
+def test_format_grade_explicit_reporting():
+    # 29 correct, 1 wrong (Q2), 70 blank (Q31-100)
+    key = Exam("fixture-exam", "Sample Exam", "Practice book", {n: frozenset("A" if n != 2 else "B") for n in range(1, 101)}, True)
+    marks = []
+    for n in range(1, 101):
+        if n == 2:
+            marks.append(Mark(n, MarkState.SINGLE, ("A",)))  # wrong
+        elif 1 <= n <= 30:
+            marks.append(Mark(n, MarkState.SINGLE, ("A",)))  # correct (29 questions)
+        else:
+            marks.append(Mark(n, MarkState.BLANK))  # 70 blank
+
+    result = grade(key, marks, confirmed=True)
+    text = format_grade(result)
+
+    assert "Score: 28.75 / 100" in text
+    assert "Correct: 29" in text
+    assert "Wrong answers: 1" in text
+    assert "Unanswered: 70" in text
+    assert "Multiple-marked: 0" in text
+    assert "Invalid-marked: 0" in text
+    assert "Wrong question numbers: Q2" in text
+    assert "Unanswered question numbers: Q31" in text
+    assert "Multiple-marked question numbers: none" in text
+    assert "Invalid-marked question numbers: none" in text
+    assert "Your answer → accepted answer:" in text
+    assert "Q2: A → B" in text
+
+
+def test_format_grade_with_alternative_answers_and_multiple_invalid():
+    key = Exam("fixture-alt", "Alt Exam", "Practice book", {
+        1: frozenset("BC"),
+        2: frozenset("A"),
+        **{n: frozenset("D") for n in range(3, 101)}
+    }, True)
+    marks = [
+        Mark(1, MarkState.MULTIPLE, ("B", "C")),  # multiple marked
+        Mark(2, MarkState.INVALID),                # invalid mark
+        *[Mark(n, MarkState.SINGLE, ("D",)) for n in range(3, 101)]  # 98 correct
+    ]
+    result = grade(key, marks, confirmed=True)
+    text = format_grade(result)
+
+    assert "Score: 97.50 / 100" in text
+    assert "Correct: 98" in text
+    assert "Wrong answers: 0" in text
+    assert "Unanswered: 0" in text
+    assert "Multiple-marked: 1" in text
+    assert "Invalid-marked: 1" in text
+    assert "Multiple-marked question numbers: Q1" in text
+    assert "Invalid-marked question numbers: Q2" in text
+    assert "Q1: B+C → B or C" in text
+    assert "Q2: invalid → A" in text
+

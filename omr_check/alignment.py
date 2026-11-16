@@ -140,7 +140,9 @@ def locate_rows(panel,layout):
     else:
         profile=(red_print(panel)[:,35:150]>0).mean(axis=1)
         profile=np.convolve(profile,np.ones(5)/5,mode='same')
-        active=profile>.36
+        low,high=np.percentile(profile[35:895],[15,85])
+        if high-low<0.15:return None
+        active=profile>min(0.28,(low+high)*0.40)
         count=25;first=61;last=879;minimum=7
     active[:35]=False;active[897:]=False
     edges=np.diff(np.r_[False,active,False].astype(np.int8))

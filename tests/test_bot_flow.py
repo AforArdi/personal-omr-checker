@@ -1,4 +1,5 @@
 import asyncio
+import json
 import shutil
 from decimal import Decimal
 from pathlib import Path
@@ -6,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from omr_check.bot import Bot
+from omr_check.bot import Bot, make_exam_token
 from omr_check.domain import Mark, MarkState
 from omr_check.settings import Settings
 
@@ -40,6 +41,8 @@ def make_update(user_id=12345, text="", caption="", document=None, callback_data
         cb = MagicMock()
         cb.data = callback_data
         cb.answer = AsyncMock()
+        cb.edit_message_text = AsyncMock()
+        cb.message = msg
         update.callback_query = cb
     else:
         update.callback_query = None
@@ -202,7 +205,7 @@ def test_retina_sample_uncertain_guard_and_resolution(bot_instance):
         assert "Model Test-01" in result_reply
         assert "Score:" in result_reply
         assert "Correct:" in result_reply
-        assert "Wrong:" in result_reply
+        assert "Wrong answers:" in result_reply
         assert "Unanswered:" in result_reply
 
     asyncio.run(_test())
@@ -251,3 +254,255 @@ def test_ambiguous_exam_name_prompts_user(bot_instance):
         assert "retina-model-test-01" in reply
 
     asyncio.run(_test())
+
+
+def test_exam_without_args_shows_concise_help(bot_instance):
+    async def _test():
+        bot = bot_instance
+        update = make_update(user_id=5001)
+        await bot.exam(update, make_context(args=[]))
+        reply = update.effective_message.reply_text.call_args[0][0]
+        assert "Usage: /exam NAME" in reply
+        assert "Examples:" in reply
+    asyncio.run(_test())
+
+
+def test_exam_select_by_displayed_label(bot_instance):
+    async def _test():
+        bot = bot_instance
+        update = make_update(user_id=5002)
+        await bot.exam(update, make_context(args=["Paper", "Final", "English", "[Practice", "book]"]))
+        reply = update.effective_message.reply_text.call_args[0][0]
+        assert "Selected: Paper Final English [Practice book]" in reply
+        assert "(ID: practice-paper-final-english)" in reply
+        assert bot.selected[5002] == "practice-paper-final-english"
+    asyncio.run(_test())
+
+
+def test_exams_pagination_and_navigation(bot_instance):
+    async def _test():
+        bot = bot_instance
+        update = make_update(user_id=5003)
+        await bot.exams(update, make_context(args=["english"]))
+        call = update.effective_message.reply_text.call_args
+        text = call[0][0]
+        markup = call[1]["reply_markup"]
+        assert "Page 1/" in text
+        assert markup is not None
+        button_texts = [btn.text for row in markup.inline_keyboard for btn in row]
+        assert any("Select:" in t for t in button_texts)
+    asyncio.run(_test())
+
+
+def test_callback_selection(bot_instance):
+    async def _test():
+        bot = bot_instance
+        token = bot.exam_token("practice-paper-final-english")
+        update = make_update(user_id=5004, callback_data=f"sel:{token}")
+        await bot.callback(update, make_context())
+        reply = update.effective_message.reply_text.call_args[0][0]
+        assert "Selected: Paper Final English [Practice book]" in reply
+        assert "(ID: practice-paper-final-english)" in reply
+        assert bot.selected[5004] == "practice-paper-final-english"
+    asyncio.run(_test())
+
+
+def test_invalid_caption_does_not_fall_back_silently(bot_instance):
+    async def _test():
+        bot = bot_instance
+        bot.selected[5005] = "practice-paper-final-english"
+        doc = MagicMock()
+        doc.mime_type = "image/jpeg"
+        doc.file_size = 500_000
+        sample_path = ROOT / "omr-exam-paper-example/20261115_191159.jpg"
+        if not sample_path.exists():
+            sample_path = ROOT / "ui-screenshots/answer-omr-1 (1).png"
+        doc.get_file = AsyncMock(return_value=DummyFile(sample_path))
+        update = make_update(user_id=5005, caption="Completely Nonexistent Exam 999", document=doc)
+        await bot.media(update, make_context())
+        reply = update.effective_message.reply_text.call_args[0][0]
+        assert "Exam not found" in reply
+        # Must NOT have created a reading session with the pre-selected exam
+        with pytest.raises(ValueError, match="No active reading"):
+            bot.sessions.get(5005)
+    asyncio.run(_test())
+
+
+def test_session_exam_id_remains_unchanged_when_new_exam_selected(bot_instance):
+    sample_path = ROOT / "omr-exam-paper-example/20261115_191159.jpg"
+    if not sample_path.exists():
+        pytest.skip("Source photo not distributed")
+    async def _test():
+        bot = bot_instance
+        doc = MagicMock()
+        doc.mime_type = "image/jpeg"
+        doc.file_size = 500_000
+        doc.get_file = AsyncMock(return_value=DummyFile(sample_path))
+
+        # Upload with exam A
+        upload_update = make_update(
+            user_id=5006,
+            caption="practice-paper-final-01-biology-1st-paper",
+            document=doc,
+        )
+        await bot.media(upload_update, make_context())
+        session = bot.sessions.get(5006)
+        assert session.exam_id == "practice-paper-final-01-biology-1st-paper"
+
+        # Now select exam B via /exam
+        exam_update = make_update(user_id=5006)
+        await bot.exam(exam_update, make_context(args=["Paper Final English [Practice book]"]))
+        assert bot.selected[5006] == "practice-paper-final-english"
+
+        # The existing session must STILL have its original exam_id
+        session_after = bot.sessions.get(5006)
+        assert session_after.exam_id == "practice-paper-final-01-biology-1st-paper"
+    asyncio.run(_test())
+
+
+def test_pagination_callback_flow(bot_instance):
+    async def _test():
+        bot = bot_instance
+        # 1. Search for biology (matches multiple exams, > 5 exams so multiple pages)
+        search_update = make_update(user_id=6001)
+        await bot.exams(search_update, make_context(args=["biology"]))
+        call = search_update.effective_message.reply_text.call_args
+        text = call[0][0]
+        markup = call[1]["reply_markup"]
+        assert "Page 1/" in text
+
+        # Find the next page button
+        nav_buttons = [btn for row in markup.inline_keyboard for btn in row if btn.callback_data.startswith("page:2:")]
+        assert len(nav_buttons) == 1
+        page2_cb = nav_buttons[0].callback_data
+
+        # 2. Trigger pagination callback
+        cb_update = make_update(user_id=6001, callback_data=page2_cb)
+        await bot.callback(cb_update, make_context())
+        cb_update.callback_query.edit_message_text.assert_called_once()
+        page2_text = cb_update.callback_query.edit_message_text.call_args[0][0]
+        assert "Page 2/" in page2_text
+
+    asyncio.run(_test())
+
+
+def test_pagination_callback_expired_query_token(bot_instance):
+    async def _test():
+        bot = bot_instance
+        # Callback with an unknown/expired query token
+        cb_update = make_update(user_id=6002, callback_data="page:2:nonexistent_hash_999")
+        await bot.callback(cb_update, make_context())
+        # Must ask user to search again, rather than silently showing all exams
+        edit_call = cb_update.callback_query.edit_message_text.call_args
+        msg = edit_call[0][0] if edit_call else cb_update.effective_message.reply_text.call_args[0][0]
+        assert "This search has expired" in msg
+        assert "run /exams [words] again" in msg
+
+    asyncio.run(_test())
+
+
+def test_invalid_selection_token_rejected_safely(bot_instance):
+    async def _test():
+        bot = bot_instance
+        cb_update = make_update(user_id=6003, callback_data="sel:invalid_token_123")
+        await bot.callback(cb_update, make_context())
+        reply = cb_update.effective_message.reply_text.call_args[0][0]
+        assert "This exam is no longer available" in reply
+        assert 6003 not in bot.selected
+
+    asyncio.run(_test())
+
+
+def test_stable_tokens_survive_catalog_mutation(tmp_path):
+    def make_keys_file(path: Path, exam_items: list[dict]):
+        data = {"schema_version": 1, "exams": exam_items}
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def make_exam_dict(eid: str, name: str):
+        return {
+            "id": eid,
+            "name": name,
+            "collection": "Practice book",
+            "status": "verified",
+            "answers": {str(i): ["A"] for i in range(1, 101)},
+            "issues": []
+        }
+
+    # Initial Catalog with 3 exams: E1, E2, E3
+    keys_file_a = tmp_path / "keys_a.json"
+    make_keys_file(keys_file_a, [
+        make_exam_dict("exam-1", "Exam One"),
+        make_exam_dict("exam-2", "Exam Two"),
+        make_exam_dict("exam-3", "Exam Three"),
+    ])
+    settings_a = Settings(token="DUMMY", allowed_users=frozenset(), keys=keys_file_a, data_dir=tmp_path / "s1", ttl_minutes=15)
+    bot_a = Bot(settings_a)
+
+    token_e1_a = bot_a.exam_token("exam-1")
+    token_e2_a = bot_a.exam_token("exam-2")
+    token_e3_a = bot_a.exam_token("exam-3")
+
+    # Modified Catalog: E3 removed, E0 added at beginning, order swapped: [E0, E2, E1]
+    keys_file_b = tmp_path / "keys_b.json"
+    make_keys_file(keys_file_b, [
+        make_exam_dict("exam-0", "Exam Zero"),
+        make_exam_dict("exam-2", "Exam Two"),
+        make_exam_dict("exam-1", "Exam One"),
+    ])
+    settings_b = Settings(token="DUMMY", allowed_users=frozenset(), keys=keys_file_b, data_dir=tmp_path / "s2", ttl_minutes=15)
+    bot_b = Bot(settings_b)
+
+    # 1. Tokens must remain completely stable across catalog reordering/additions
+    assert bot_b.exam_token("exam-1") == token_e1_a
+    assert bot_b.exam_token("exam-2") == token_e2_a
+
+    async def _test():
+        # 2. Clicking old button for E1 in Bot B resolves to Exam One, never redirected to E0 or E2
+        update_e1 = make_update(user_id=7001, callback_data=f"sel:{token_e1_a}")
+        await bot_b.callback(update_e1, make_context())
+        assert bot_b.selected[7001] == "exam-1"
+        reply = update_e1.effective_message.reply_text.call_args[0][0]
+        assert "Selected: Exam One [Practice book] (ID: exam-1)" in reply
+
+        # 3. Clicking old button for removed E3 in Bot B is safely rejected, never redirects
+        update_e3 = make_update(user_id=7002, callback_data=f"sel:{token_e3_a}")
+        await bot_b.callback(update_e3, make_context())
+        assert 7002 not in bot_b.selected
+        reply_e3 = update_e3.effective_message.reply_text.call_args[0][0]
+        assert "This exam is no longer available" in reply_e3
+
+    asyncio.run(_test())
+
+
+def test_token_collision_detected(tmp_path, monkeypatch):
+    keys_file = tmp_path / "keys_coll.json"
+    data = {
+        "schema_version": 1,
+        "exams": [
+            {
+                "id": "exam-alpha",
+                "name": "Exam Alpha",
+                "collection": "Retina",
+                "status": "verified",
+                "answers": {str(i): ["A"] for i in range(1, 101)},
+                "issues": []
+            },
+            {
+                "id": "exam-beta",
+                "name": "Exam Beta",
+                "collection": "Retina",
+                "status": "verified",
+                "answers": {str(i): ["A"] for i in range(1, 101)},
+                "issues": []
+            }
+        ]
+    }
+    keys_file.write_text(json.dumps(data), encoding="utf-8")
+    settings = Settings(token="DUMMY", allowed_users=frozenset(), keys=keys_file, data_dir=tmp_path / "s_coll", ttl_minutes=15)
+
+    # Force a token collision between two different exams
+    monkeypatch.setattr("omr_check.bot.make_exam_token", lambda eid: "same_token_collision")
+
+    with pytest.raises(ValueError, match="Exam token collision detected"):
+        Bot(settings)
+
