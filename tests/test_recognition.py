@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from omr_check.domain import MarkState
-from omr_check.recognition import Recognizer, RecognitionError, classify
+from omr_check.recognition import Recognizer, RecognitionError, classify, load_image
 
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -64,6 +64,22 @@ def test_unrelated_image_is_rejected(recognizer,tmp_path):
     cv2.putText(image,"Not an OMR sheet",(100,400),cv2.FONT_HERSHEY_SIMPLEX,2,(0,0,0),3)
     file=tmp_path/"other.jpg"; cv2.imwrite(str(file),image)
     with pytest.raises(RecognitionError): recognizer.read(file)
+
+
+def test_incomplete_grid_is_rejected(recognizer, tmp_path):
+    golden = json.loads((ROOT / "data/sample_expected.json").read_text())
+    for name, item in golden.items():
+        file = ROOT / "omr-exam-paper-example" / item["file"]
+        if not file.exists():
+            continue
+        source = load_image(file)
+        crop = source[510:990, 125:800] if name == "retina" else source[480:960, 105:670]
+        assert min(crop.shape[:2]) >= 400
+        path = tmp_path / f"incomplete_{name}.jpg"
+        cv2.imwrite(str(path), crop)
+        with pytest.raises(RecognitionError) as exc_info:
+            recognizer.read(path)
+        assert "complete answer columns safely" in str(exc_info.value)
 
 
 def test_full_sample_never_confidently_misreads_a_question(recognizer):

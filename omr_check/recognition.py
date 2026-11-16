@@ -9,6 +9,7 @@ import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .domain import Mark, MarkState
+from .alignment import StructuralAligner
 
 Image.MAX_IMAGE_PIXELS = 35_000_000
 cv2.setNumThreads(2)
@@ -24,9 +25,12 @@ def load_image(path: Path, width: int = 1000) -> np.ndarray:
             if im.width * im.height > 35_000_000:
                 raise RecognitionError("Image is too large; use a photo below 35 megapixels")
             im = ImageOps.exif_transpose(im).convert("RGB")
-            if min(im.size) < 650:
+            if min(im.size) < 400:
                 raise RecognitionError("Image resolution is too low. Send the original photo as a file")
-            im = im.resize((width, round(im.height * width / im.width)), Image.Resampling.LANCZOS)
+            target_w = width if im.width <= im.height else round(im.width * width / im.height)
+            target_h = round(im.height * width / im.width) if im.width <= im.height else width
+            if (im.width, im.height) != (target_w, target_h):
+                im = im.resize((target_w, target_h), Image.Resampling.LANCZOS)
             return cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise RecognitionError("Cannot read this image. Send a JPEG or PNG photo") from exc
@@ -58,6 +62,7 @@ class Reading:
     aligned: np.ndarray
     annotated: np.ndarray
     alignment: dict
+    sampling_centers: np.ndarray | None = None
 
 
 def classify(number: int, strengths: list[float]) -> Mark:
@@ -81,8 +86,25 @@ class Recognizer:
             mask[y0:y1, x0:x1] = 255
             kp, desc = self.sift.detectAndCompute(cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY), mask)
             self.templates.append(Template(spec["id"], reference, np.array(spec["centers"], np.float32), spec["radius"], spec["roi"], kp, desc))
+        geometry=json.loads((directory/'layout_geometry.json').read_text(encoding='utf-8'))
+        self.structural=StructuralAligner(self.templates,geometry)
 
     def read(self, path: Path) -> Reading:
+        cv2.setRNGSeed(0)
+        image = load_image(path)
+        for rotation in (0, 1, 2, 3):
+            rotated = np.ascontiguousarray(np.rot90(image, rotation))
+            if rotated.shape[1] != 1000:
+                rotated = cv2.resize(rotated, (1000, round(rotated.shape[0] * 1000 / rotated.shape[1])))
+            match = self.structural.align(rotated)
+            if match is not None:
+                coverage, template, aligned, evidence = match
+                metrics = {'method': evidence.method, 'circle_coverage': round(coverage, 4),
+                           'validated_rows_per_column': evidence.row_coverage, 'rotation_quarters': rotation}
+                return self._finish_reading(template, aligned, metrics, evidence.centers, evidence.supported)
+        return self._read_legacy(path)
+
+    def _read_legacy(self, path: Path) -> Reading:
         cv2.setRNGSeed(0)
         image = load_image(path)
         best = None
@@ -101,26 +123,39 @@ class Recognizer:
             if best is not None and best[0] > 150:
                 break
         if best is None:
-            raise RecognitionError("The complete answer grid could not be aligned reliably. Photograph all 100 rows clearly, flatten the page, avoid shadows, and try again")
+            raise RecognitionError("I could not locate and cross-check all four complete answer columns safely. Include the column headings and bottom row in the photo; keep all four black corner squares visible on Retina sheets. Send the original JPEG/PNG as a file if possible")
         _, template, aligned, metrics = best
+        metrics['method'] = 'feature_fallback'
+        return self._finish_reading(template, aligned, metrics)
+
+    @staticmethod
+    def _fraction(mask, x, y, r):
+        x0, x1 = int(x - r - 1), int(x + r + 2)
+        y0, y1 = int(y - r - 1), int(y + r + 2)
+        if x0 < 0 or y0 < 0 or x1 > mask.shape[1] or y1 > mask.shape[0]: return None
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        disk = (xx - x)**2 + (yy - y)**2 <= r * r
+        return float(mask[y0:y1, x0:x1][disk].mean())
+
+    def _finish_reading(self, template, aligned, metrics, centers=None, supported=None):
+        centers = template.centers if centers is None else centers
         threshold = 155 if template.id == "practice-book" else 210
         observed = ink_mask(aligned, threshold)
         baseline = ink_mask(template.image, threshold)
         marks = []
-        for number, row in enumerate(template.centers, 1):
+        for number, (row, reference_row) in enumerate(zip(centers, template.centers), 1):
             strengths = []
-            for x, y in row:
+            for (x, y), (rx, ry) in zip(row, reference_row):
                 r = template.radius * (0.78 if template.id == "practice-book" else 0.60)
-                x0, x1 = int(x - r - 1), int(x + r + 2)
-                y0, y1 = int(y - r - 1), int(y + r + 2)
-                yy, xx = np.ogrid[y0:y1, x0:x1]
-                disk = (xx - x)**2 + (yy - y)**2 <= r*r
-                obs = float(observed[y0:y1, x0:x1][disk].mean())
-                ref = float(baseline[y0:y1, x0:x1][disk].mean())
-                strengths.append(max(0.0, (obs-ref)/max(0.3,1.0-ref)))
-            marks.append(classify(number, strengths))
-        annotated = self.annotate(template, aligned, marks)
-        return Reading(template.id, marks, aligned, annotated, metrics)
+                obs = self._fraction(observed, x, y, r)
+                ref = self._fraction(baseline, rx, ry, r)
+                strengths.append(0.4 if obs is None or ref is None else max(0.0, (obs - ref) / max(0.3, 1.0 - ref)))
+            mark = classify(number, strengths)
+            if supported is not None and (supported[number - 1].sum() + len(mark.choices)) < 2:
+                mark = Mark(number, MarkState.UNCERTAIN, mark.choices, mark.strengths, 'Printed cells in this row need review')
+            marks.append(mark)
+        annotated = self.annotate(template, aligned, marks, centers)
+        return Reading(template.id, marks, aligned, annotated, metrics, centers)
 
     def _align(self, template, image, kp, desc):
         matcher = cv2.BFMatcher(cv2.NORM_L2)
@@ -186,10 +221,10 @@ class Recognizer:
         return count, template, aligned, {"inliers": count, "median_error_px": round(error, 3)}
 
     @staticmethod
-    def annotate(template: Template, aligned: np.ndarray, marks: list[Mark]) -> np.ndarray:
+    def annotate(template: Template, aligned: np.ndarray, marks: list[Mark], centers=None) -> np.ndarray:
         output = aligned.copy()
         colors = {MarkState.SINGLE:(30,150,30), MarkState.BLANK:(180,110,0), MarkState.MULTIPLE:(0,0,220), MarkState.INVALID:(0,0,220), MarkState.UNCERTAIN:(0,150,240)}
-        for mark, row in zip(marks, template.centers):
+        for mark, row in zip(marks, template.centers if centers is None else centers):
             color = colors[mark.state]
             for choice, (x,y) in zip("ABCD", row):
                 if choice in mark.choices:

@@ -154,7 +154,7 @@ class Bot:
                 session.reading.marks[number-1] = change
             session.revision += 1
             template = next(t for t in self.recognizer.templates if t.id == session.reading.template_id)
-            session.reading.annotated = self.recognizer.annotate(template,session.reading.aligned,session.reading.marks)
+            session.reading.annotated = self.recognizer.annotate(template,session.reading.aligned,session.reading.marks,session.reading.sampling_centers)
             session.audit()
             await self.preview(update,session)
         except ValueError as exc:
