@@ -44,6 +44,34 @@ def ink_mask(image: np.ndarray, threshold: int = 155) -> np.ndarray:
     return normalized < threshold
 
 
+def paper_ink_fraction(image: np.ndarray, x: float, y: float, radius: float) -> float | None:
+    """Measure dense ink against nearby paper, independently of the answer key.
+
+    A Gaussian background includes the filled bubble itself and neighbouring
+    answers. Glossy black pen can also reflect much more red than blue/green.
+    Estimate paper from an outer annulus instead, requiring both overall and
+    red-channel contrast so pink form printing alone is not treated as a fill.
+    A 3px median removes isolated pen reflections without filling circle holes.
+    """
+    extent = int(np.ceil(radius * 2.5))
+    ix, iy = round(float(x)), round(float(y))
+    if (ix - extent < 0 or iy - extent < 0
+            or ix + extent >= image.shape[1] or iy + extent >= image.shape[0]):
+        return None
+    patch = image[iy-extent:iy+extent+1, ix-extent:ix+extent+1].astype(np.float32)
+    yy, xx = np.mgrid[-extent:extent+1, -extent:extent+1]
+    distance = (xx + ix - x)**2 + (yy + iy - y)**2
+    core = distance <= radius**2
+    annulus = (distance > (radius * 1.8)**2) & (distance < (radius * 2.4)**2)
+    paper = np.percentile(patch[annulus], 75, axis=0)
+    if paper.min() < 25:
+        return None
+    relative = patch / paper
+    contrast = np.maximum(relative.mean(axis=2) / 0.75, relative[:, :, 2] / 0.85)
+    contrast = cv2.medianBlur(contrast.astype(np.float32), 3)
+    return float((contrast[core] < 1.0).mean())
+
+
 @dataclass
 class Template:
     id: str
@@ -143,17 +171,35 @@ class Recognizer:
         observed = ink_mask(aligned, threshold)
         baseline = ink_mask(template.image, threshold)
         marks = []
+        local_rescues = []
         for number, (row, reference_row) in enumerate(zip(centers, template.centers), 1):
             strengths = []
+            global_strengths = []
             for (x, y), (rx, ry) in zip(row, reference_row):
                 r = template.radius * (0.78 if template.id == "practice-book" else 0.60)
                 obs = self._fraction(observed, x, y, r)
                 ref = self._fraction(baseline, rx, ry, r)
-                strengths.append(0.4 if obs is None or ref is None else max(0.0, (obs - ref) / max(0.3, 1.0 - ref)))
+                strength = 0.4 if obs is None or ref is None else max(0.0, (obs - ref) / max(0.3, 1.0 - ref))
+                global_strengths.append(strength)
+                local_obs = paper_ink_fraction(aligned, x, y, r)
+                local_ref = paper_ink_fraction(template.image, rx, ry, r)
+                if local_obs is not None and local_ref is not None:
+                    local_strength = max(0.0, (local_obs - local_ref) / max(0.3, 1.0 - local_ref))
+                    # Keep the existing partial-mark signal: local smoothing must
+                    # never turn a questionable tick/cross into a silent blank.
+                    # Only supplement with dense fill evidence. Small differences
+                    # in printed letters between photographs are not new ink.
+                    if local_strength >= 0.72:
+                        strength = max(strength, local_strength)
+                strengths.append(strength)
             mark = classify(number, strengths)
             if supported is not None and (supported[number - 1].sum() + len(mark.choices)) < 2:
                 mark = Mark(number, MarkState.UNCERTAIN, mark.choices, mark.strengths, 'Printed cells in this row need review')
+            if mark.state == MarkState.SINGLE and classify(number, global_strengths).state != MarkState.SINGLE:
+                local_rescues.append(number)
             marks.append(mark)
+        metrics['ink_measurement'] = 'global_red_and_local_paper'
+        metrics['local_fill_rescues'] = local_rescues
         annotated = self.annotate(template, aligned, marks, centers)
         return Reading(template.id, marks, aligned, annotated, metrics, centers)
 

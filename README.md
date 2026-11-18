@@ -106,4 +106,12 @@ Verify and finalize the key database before building the deployment image. Rebui
 
 A small set of real photos cannot establish production accuracy across different phones, shadows, folds, lighting, or dense tick/cross marks. Partial and nonstandard marks are sent for review. Synthetic marks are useful regression tests, not evidence of universal accuracy. Keep the complete grid visible and flatten the page.
 
+Ink measurement combines the original red-channel check with dense-fill evidence
+relative to nearby paper in each bubble. This handles reflective black-pen fills
+that photograph as brown without lowering the fill-confidence threshold. The
+additional signal must cover most of the bubble after reference-print subtraction;
+small printed-letter differences do not create new REVIEW states. Existing partial
+mark evidence and final confirmation requirements remain in force. The real-photo
+regression is reproducible with `python -m pytest tests/test_pen_photo.py -q`.
+
 Images and review records live under `var/sessions`. The configured default session lifetime is 30 minutes. Expired data is removed on subsequent activity or startup; no background deletion service is implied. Successful confirmation and cancellation delete that active session. Restarting the bot requires uploading the photo again. Bot tokens and local data are excluded from version control and the code download.

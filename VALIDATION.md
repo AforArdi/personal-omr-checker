@@ -7,7 +7,7 @@
   - 17 Retina exams verified against high-resolution source photos (`*-1.jpg` and `*-2.jpg`).
   - Multi-answer entries verified (e.g. `practice-paper-final-02-biology-1st-paper` Q74 = `[B, C]`, `practice-paper-final-02-physics-2nd-paper` Q94 = `[B, D]`, `practice-model-test-26` Q60 = `[A, B]`, Q93 = `[B, D]`).
   - Validation check (`python -m omr_check validate-keys`): **67 exams; 67 verified; 0 incomplete**.
-- **Core & Integration Test Suite**: **45 passed** (`python -m pytest -q`).
+- **Core & Integration Test Suite**: **65 passed, 0 failed, 0 skipped** (`python -u -m pytest -q`, 159.43 seconds, 2026-11-18).
   - `test_scoring.py`: Exact Decimal arithmetic, +1 correct, -0.25 wrong/multiple/invalid, 0 blank, negative scores, multi-choice key matching, explicit label result reporting (`Score:`, `Correct:`, `Wrong answers:`, `Unanswered:`, `Multiple-marked:`, `Invalid-marked:`), formatted question-number lists (`Q2`, `none`), and multi-accepted answer comparisons (`Q2: A → B or C`).
   - `test_catalog.py`: Database schema validation, case/punctuation-insensitive lookup, ambiguous name detection, exact displayed label matching (`Paper Final English [Practice book]`), alias matching, collection disambiguation, and keyword search across IDs, names, collections, and aliases.
   - `test_recognition.py`: SIFT grid alignment, structural alignment, EXIF correction, blank rejection, ink measurement, repeatability, and the 100-question Canva regression fixture (`test_canva_30marked_regression`) verifying 30 single fills (including Q12, Q13, Q14, Q19), 70 blanks, and 0 uncertain/review rows.
@@ -90,6 +90,35 @@ Q2: A → B
 - Alternative accepted answers in answer keys are explicitly presented (e.g. `B or C`).
 - Scoring adheres strictly to: +1 correct, -0.25 wrong, -0.25 multiple, -0.25 invalid, 0 unanswered.
 - Grading cannot proceed if any row has unresolved REVIEW status.
+
+## Reflective black-pen photograph regression (2026-11-18)
+
+- Required fixture: `tests/fixtures/practice_pen_glare.jpg`; all 100 choices were
+  manually transcribed independently of any exam key in
+  `tests/fixtures/practice_pen_glare_expected.json` (90 filled, 10 blank).
+- The previous pipeline aligned the full grid with 100% circle support but returned
+  19 REVIEW rows and incorrectly called the filled Q58 and Q83 blank. Their
+  global-red ink strengths were only 0.095 and 0.129. This was a photometric
+  failure on glossy ink, rather than missing rows.
+- Measurement now estimates nearby paper from an outer annulus and requires both
+  mean-channel and red-channel contrast. A small median filter suppresses isolated
+  reflections. Reference-print subtraction and the 0.72 dense-fill threshold are
+  preserved. Only strong local evidence supplements the original measurement;
+  the original partial-mark signal cannot be erased by this step.
+- The original photo, JPEG quality 75 at width 720, and 90-degree rotation each
+  read all 100 choices exactly: 90 singles, 10 blanks, zero REVIEW and zero errors.
+- The full suite passed all 65 tests. The independent alignment benchmark
+  (`python -m tools.benchmark_alignment --phase pen-local-review`) accepted all
+  10 complete-grid cases with zero confident errors and rejected both incomplete
+  grids. Practice had zero REVIEW rows in every case. Retina retained its existing
+  review rows except the rotated case, where Q70 was correctly recovered.
+- `tests/test_ink_measurement.py` checks empty cells, ticks, crosses, half fills,
+  sparse dark-red printing, and double fills on both templates. These examples
+  are regression coverage, not a guarantee for every possible handwritten shape.
+- Scoring was independently checked: 19 scoring tests passed. The total remains
+  `correct - 0.25 * (wrong + multiple + invalid)`, equivalent to
+  `100 - 1.25 * (wrong + multiple + invalid) - blank`; the lost correct-answer
+  point must not be subtracted again when summing from zero.
 
 ## Remaining Limitations & Operational Notes
 
